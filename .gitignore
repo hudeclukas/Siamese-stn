@@ -1,0 +1,8 @@
+# tensorboard logs directory
+board/
+
+# model directory
+model/
+
+# project files
+*.idea

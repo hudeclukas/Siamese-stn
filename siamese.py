@@ -2,16 +2,15 @@ import tensorflow as tf
 from tensorflow.contrib import slim as slim
 
 class siamese:
-    def __init__(self, margin, image_size=(150,150,1)):
+    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, margin:float, image_size=(150,150,1)):
         self.__margin = margin
-        self.net_1_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0],image_size[1], image_size[2]], name="siamese_1_input")
-        self.net_2_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]], name="siamese_2_input")
-        self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=None)
+
+        self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[])
 
         with tf.variable_scope("siamese") as scope:
-            self.network_1 = self.__network(self.net_1_input, 'net_1')
+            self.network_1 = self.__network(net_1_input, 'net_1')
             scope.reuse_variables()
-            self.network_2 = self.__network(self.net_2_input, 'net_2')
+            self.network_2 = self.__network(net_2_input, 'net_2')
 
         self.y = tf.placeholder(tf.float32, [None, ], name="labels")
         self.loss = self.__loss_contrastive()
@@ -104,7 +103,7 @@ class siamese:
             margin = tf.constant(self.__margin, name="margin", dtype=tf.float32)
 
             dist, dist2 = self.__distanceEuclid()
-    
+
             y_f = tf.subtract(1.0, y_t, name="1-y")
             half_f = tf.multiply(y_f, 0.5, name="y_f/2")
             similar = tf.multiply(half_f, dist2, name="con_l")
@@ -113,6 +112,5 @@ class siamese:
 
             losses = tf.add(similar, dissimilar, name="losses")
             loss = tf.reduce_mean(losses, name="loss_reduced")
-            # loss=tf.reduce_mean(dist)
 
             return loss

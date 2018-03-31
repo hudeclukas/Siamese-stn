@@ -1,5 +1,7 @@
 # tensorboard logs directory
 board/
+logs/
+__pycache__/
 
 # model directory
 model/

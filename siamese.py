@@ -1,13 +1,17 @@
 import tensorflow as tf
 from tensorflow.contrib import slim as slim
 
-class siamese:
-    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, margin:float, image_size=(150,150,1)):
-        self.__margin = margin
+import summary_utils as sum_uts
 
-        self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[])
+
+class siamese:
+    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, margin:float, batch_size:int, image_size=(150,150,1)):
+        self.__margin = margin
+        self._batch_size = batch_size
+        self._image_size = image_size
 
         with tf.variable_scope("siamese") as scope:
+            self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[],name='Droput_keep_prob')
             self.network_1 = self.__network(net_1_input, 'net_1')
             scope.reuse_variables()
             self.network_2 = self.__network(net_2_input, 'net_2')
@@ -16,6 +20,8 @@ class siamese:
         self.loss = self.__loss_contrastive()
 
     def __network(self, input, name:str):
+        sum_uts.image_summary(input, self._image_size, 0, name+'_input_dissimilar')
+        sum_uts.image_summary(input, self._image_size, self._batch_size-1, name+'_input_similar')
         conv1 = slim.conv2d(
             inputs=input,
             num_outputs=96,
@@ -112,5 +118,10 @@ class siamese:
 
             losses = tf.add(similar, dissimilar, name="losses")
             loss = tf.reduce_mean(losses, name="loss_reduced")
+
+            tf.summary.histogram('loss_distances', dist)
+            tf.summary.scalar('loss_distance_min', tf.reduce_min(dist))
+            tf.summary.scalar('loss_distance_max', tf.reduce_max(dist))
+            tf.summary.scalar('loss_contrastive', loss)
 
             return loss

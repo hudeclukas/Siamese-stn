@@ -74,6 +74,14 @@ def main():
                             siam_stn.siamese.dropout_keep_prob: 0.6,
                             learning_rate: l_rate
                         })
+
+                    # weight = tf.global_variables('LOC_net_1/net_1_fc_3/W_fc3:0')[0]
+                    # bias = tf.global_variables('LOC_net_1/net_1_fc_3/b_fc3:0')[0]
+                    # print('FC3 weight')
+                    # print(weight.eval())
+                    # print('FC3 bias')
+                    # print(bias.eval())
+
                     if step < 50 or step % 10 == 0:
                         print("Step: [{:04d}.] --> loss: |{:3.8f}|...".format(step, loss_v))
 

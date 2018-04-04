@@ -45,26 +45,27 @@ def spatial_transformer_layer(input_fmap, theta, batch_size, out_dims=None):
     C = tf.shape(input_fmap)[3]
 
     # reshape theta to (B, 2, 3)
-    theta = tf.reshape(theta, [B, 2, 3])
+    # theta = tf.reshape(theta, [B, 2, 3])
 
-    # generate grids of same size or upsample/downsample if specified
-    if out_dims:
-        out_H = out_dims[0]
-        out_W = out_dims[1]
-        batch_grids = affine_grid_generator(out_H, out_W, theta)
-    else:
-        batch_grids = affine_grid_generator(H, W, theta)
+    with tf.name_scope('Grid_generator'):
+        # generate grids of same size or upsample/downsample if specified
+        if out_dims:
+            out_H = out_dims[0]
+            out_W = out_dims[1]
+            batch_grids = affine_grid_generator(out_H, out_W, theta)
+        else:
+            batch_grids = affine_grid_generator(H, W, theta)
 
-    x_s = batch_grids[:, 0, :, :]
-    y_s = batch_grids[:, 1, :, :]
+        x_s = batch_grids[:, 0, :, :]
+        y_s = batch_grids[:, 1, :, :]
 
-    # sample input with grid to get output
-    out_fmap = bilinear_sampler(input_fmap, x_s, y_s)
-    with tf.name_scope('STL'):
-        sum_uts.image_summary(out_fmap, (150, 150, 1), 0, 'stl_0')
-        sum_uts.image_summary(out_fmap, (150, 150, 1), batch_size-1, 'stl_n')
+        # sample input with grid to get output
+        out_fmap = bilinear_sampler(input_fmap, x_s, y_s)
+        with tf.name_scope('STL'):
+            sum_uts.image_summary(out_fmap, (150, 150, 1), 0, 'stl_0')
+            sum_uts.image_summary(out_fmap, (150, 150, 1), batch_size-1, 'stl_n')
 
-    return out_fmap
+        return out_fmap
 
 def affine_grid_generator(height, width, theta):
     """

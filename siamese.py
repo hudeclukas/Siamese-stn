@@ -114,7 +114,7 @@ class siamese:
             half_f = tf.multiply(y_f, 0.5, name="y_f/2")
             similar = tf.multiply(half_f, dist2, name="con_l")
             half_t = tf.multiply(y_t, 0.5, name="y_t/2")
-            dissimilar = tf.multiply(half_t, tf.maximum(0.0, tf.subtract(margin, dist)))
+            dissimilar = tf.multiply(half_t, tf.pow(tf.maximum(0.0, tf.subtract(margin, dist)), 2))
 
             losses = tf.add(similar, dissimilar, name="losses")
             loss = tf.reduce_mean(losses, name="loss_reduced")

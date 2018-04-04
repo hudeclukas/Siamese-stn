@@ -29,29 +29,29 @@ class siamese_stn:
         with tf.variable_scope('LOC_'+name):
             sum_uts.image_summary(input, self.__image_size, 0, name='input_image_0')
             sum_uts.image_summary(input, self.__image_size, self.__batch_size-1, name='input_image_n')
-
-            conv1 = slim.conv2d(
-                inputs=input,
-                num_outputs=32,
-                kernel_size=[5,5],
-                scope=name+'_conv_1'
-            )
-            pool1 = slim.max_pool2d(
-                inputs=conv1,
-                kernel_size=[2,2],
-                scope=name+'_pool_1'
-            )
-            conv2 = slim.conv2d(
-                inputs=pool1,
-                num_outputs=64,
-                kernel_size=[5,5],
-                scope=name+'_conv_2'
-            )
-            pool2 = slim.max_pool2d(
-                inputs=conv2,
-                kernel_size=[3, 3],
-                scope=name + '_pool_2'
-            )
+            with tf.name_scope(name+'_feature_extractor'):
+                conv1 = slim.conv2d(
+                    inputs=input,
+                    num_outputs=32,
+                    kernel_size=[5,5],
+                    scope=name+'_conv_1'
+                )
+                pool1 = slim.max_pool2d(
+                    inputs=conv1,
+                    kernel_size=[2,2],
+                    scope=name+'_pool_1'
+                )
+                conv2 = slim.conv2d(
+                    inputs=pool1,
+                    num_outputs=64,
+                    kernel_size=[5,5],
+                    scope=name+'_conv_2'
+                )
+                pool2 = slim.max_pool2d(
+                    inputs=conv2,
+                    kernel_size=[3, 3],
+                    scope=name + '_pool_2'
+                )
             sum_uts.conv_image_summary(pool2, (self.__image_size[0] >> 2, self.__image_size[1] >> 2, 64), 0, 'locnet_pool_2_out_0')
             sum_uts.conv_image_summary(pool2, (self.__image_size[0] >> 2, self.__image_size[1] >> 2, 64), self.__batch_size-1, 'locnet_pool_2_out_n')
 
@@ -67,12 +67,12 @@ class siamese_stn:
                 scope=name+'_fc_2'
             )
             # identity transform
-            initial = np.array([[1., 0, 0], [0, 1., 0]])
-            initial = initial.astype('float32').flatten()
+            # initial = np.array([[1., 0, 0], [0, 1., 0]])
+            # initial = initial.astype('float32').flatten()
             # localisation network
-            with tf.name_scope(name+'_fc_3'):
-                W_fc3 = tf.Variable(tf.zeros([fc_2.shape[1].value, 6]), name='W_fc3')
-                b_fc3 = tf.Variable(initial_value=initial, name='b_fc3')
+            with tf.variable_scope(name+'_fc_3', reuse=True):
+                W_fc3 = tf.Variable(tf.zeros([fc_2.shape[1].value, 2]), name='W_fc3')
+                b_fc3 = tf.Variable(initial_value=[0], name='b_fc3')
                 h_fc3 = tf.matmul(fc_2, W_fc3) + b_fc3
 
             return h_fc3

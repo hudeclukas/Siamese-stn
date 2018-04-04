@@ -35,3 +35,8 @@ def conv_image_summary(conv_layer:tf.Tensor, patch_size:tuple, index:int, name:s
             method=tf.image.ResizeMethod.NEAREST_NEIGHBOR
         )
         tf.summary.image(name, image)
+
+def print_layer(layer:tf.Tensor):
+    values = layer.eval()
+    print('Layer: {:s}'.format(layer.name))
+    print(values)

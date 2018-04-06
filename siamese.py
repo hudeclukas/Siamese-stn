@@ -12,9 +12,9 @@ class siamese:
 
         with tf.variable_scope("siamese") as scope:
             self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[],name='Droput_keep_prob')
-            self.network_1 = self.__network(net_1_input, 'net_1')
+            self.network_1 = self.__network(net_1_input, 'siam')
             scope.reuse_variables()
-            self.network_2 = self.__network(net_2_input, 'net_2')
+            self.network_2 = self.__network(net_2_input, 'siam')
 
         self.y = tf.placeholder(tf.float32, [None, ], name="labels")
         self.loss = self.__loss_contrastive()

@@ -1,8 +1,14 @@
 import tensorflow as tf
+import numpy as np
+from six.moves import xrange
 import summary_utils as sum_uts
 
-def spatial_transformer_layer(input_fmap, theta, batch_size, out_dims=None):
+def spatial_transformer_layer(input_fmap_1, input_fmap_2, thetas, batch_size, out_dims=(150,150,1)):
     """
+    Lukas Hudec Modification
+    2x input of image pair
+    thetas - rotation angles for both inputs
+    ---------------------------------------------------------------------
     Spatial Transformer Network layer implementation as described in [1].
 
     The layer is composed of 3 elements:
@@ -38,207 +44,201 @@ def spatial_transformer_layer(input_fmap, theta, batch_size, out_dims=None):
          (https://arxiv.org/abs/1506.02025)
 
     """
-    # grab input dimensions
-    B = tf.shape(input_fmap)[0]
-    H = tf.shape(input_fmap)[1]
-    W = tf.shape(input_fmap)[2]
-    C = tf.shape(input_fmap)[3]
+    with tf.name_scope('transformation_matrices'):
+        thetas_divided = tf.reshape(thetas, (-1, 2, 6), 'thetas_divided')
+        matrix_1 = tf.reshape(thetas_divided[:, 0],(-1,2,3),name='matrix_1')
+        matrix_2 = tf.reshape(thetas_divided[:,1], (-1,2,3),name='matrix_2')
 
-    # reshape theta to (B, 2, 3)
-    # theta = tf.reshape(theta, [B, 2, 3])
+        tf.summary.text('test_matrix_0',tf.as_string(matrix_1[0],precision=4))
+        tf.summary.text('Transformation_Matrix_1', tf.as_string(tf.reshape(matrix_1, [-1, 6]), precision=4))
+        tf.summary.text('Transformation_Matrix_2', tf.as_string(tf.reshape(matrix_2, [-1, 6]), precision=4))
 
-    with tf.name_scope('Grid_generator'):
-        # generate grids of same size or upsample/downsample if specified
-        if out_dims:
-            out_H = out_dims[0]
-            out_W = out_dims[1]
-            batch_grids = affine_grid_generator(out_H, out_W, theta)
-        else:
-            batch_grids = affine_grid_generator(H, W, theta)
+    with tf.variable_scope('Transformer') as scope:
+        out_fmap_1 = transformer(input_fmap_1, matrix_1)
+        scope.reuse_variables()
+        out_fmap_2 = transformer(input_fmap_2, matrix_2)
+        with tf.name_scope('STL_summary'):
+            sum_uts.image_summary(out_fmap_1, out_dims, 0, 'stl_out_fmap_1_0')
+            sum_uts.image_summary(out_fmap_2, out_dims, 0, 'stl_out_fmap_2_0')
+            sum_uts.image_summary(out_fmap_1, out_dims, batch_size - 1, 'stl_out_fmap_1_n')
+            sum_uts.image_summary(out_fmap_2, out_dims, batch_size - 1, 'stl_out_fmap_2_n')
 
-        x_s = batch_grids[:, 0, :, :]
-        y_s = batch_grids[:, 1, :, :]
+        return out_fmap_1, out_fmap_2
 
-        # sample input with grid to get output
-        out_fmap = bilinear_sampler(input_fmap, x_s, y_s)
-        with tf.name_scope('STL'):
-            sum_uts.image_summary(out_fmap, (150, 150, 1), 0, 'stl_0')
-            sum_uts.image_summary(out_fmap, (150, 150, 1), batch_size-1, 'stl_n')
-
-        return out_fmap
-
-def affine_grid_generator(height, width, theta):
-    """
-    This function returns a sampling grid, which when
-    used with the bilinear sampler on the input feature
-    map, will create an output feature map that is an
-    affine transformation [1] of the input feature map.
-
-    Input
+def transformer(U, theta, out_size=(150,150,1), name='SpatialTransformer', **kwargs):
+    """Spatial Transformer Layer
+    Implements a spatial transformer layer as described in [1]_.
+    Based on [2]_ and edited by David Dao for Tensorflow.
+    Parameters
+    ----------
+    U : tf.Tensor
+        The output of a convolutional net should have the
+        shape [num_batch, height, width, num_channels].
+    theta: float
+        The output of the
+        localisation network should be [num_batch, 6].
+    out_size: tuple of two ints
+        The size of the output of the network (height, width)
+    References
+    ----------
+    .. [1]  Spatial Transformer Networks
+            Max Jaderberg, Karen Simonyan, Andrew Zisserman, Koray Kavukcuoglu
+            Submitted on 5 Jun 2015
+    .. [2]  https://github.com/skaae/transformer_network/blob/master/transformerlayer.py
+    Notes
     -----
-    - height: desired height of grid/output. Used
-      to downsample or upsample.
-
-    - width: desired width of grid/output. Used
-      to downsample or upsample.
-
-    - theta: affine transform matrices of shape (num_batch, 2, 3).
-      For each image in the batch, we have 6 theta parameters of
-      the form (2x3) that define the affine transformation T.
-
-    Returns
-    -------
-    - normalized grid (-1, 1) of shape (num_batch, 2, H, W).
-      The 2nd dimension has 2 components: (x, y) which are the
-      sampling points of the original image for each point in the
-      target image.
-
-    Note
-    ----
-    [1]: the affine transformation allows cropping, translation,
-         and isotropic scaling.
+    To initialize the network to the identity transform init
+    ``theta`` to :
+        identity = np.array([[1., 0., 0.],
+                             [0., 1., 0.]])
+        identity = identity.flatten()
+        theta = tf.Variable(initial_value=identity)
     """
-    # grab batch size
-    with tf.variable_scope('Affine_Grid_Generator'):
-        num_batch = tf.shape(theta)[0]
+    def _repeat(x, n_repeats):
+        with tf.variable_scope('_repeat'):
+            rep = tf.transpose(
+                tf.expand_dims(tf.ones(shape=tf.stack([n_repeats, ])), 1), [1, 0])
+            rep = tf.cast(rep, 'int32')
+            x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
+            return tf.reshape(x, [-1])
 
-        # create normalized 2D grid
-        x = tf.linspace(-1.0, 1.0, width)
-        y = tf.linspace(-1.0, 1.0, height)
-        x_t, y_t = tf.meshgrid(x, y)
+    def _interpolate(im, x, y, out_size):
+        with tf.variable_scope('_interpolate'):
+            # constants
+            num_batch = tf.shape(im)[0]
+            height = tf.shape(im)[1]
+            width = tf.shape(im)[2]
+            channels = tf.shape(im)[3]
 
-        # flatten
-        x_t_flat = tf.reshape(x_t, [-1])
-        y_t_flat = tf.reshape(y_t, [-1])
+            x = tf.cast(x, 'float32')
+            y = tf.cast(y, 'float32')
+            height_f = tf.cast(height, 'float32')
+            width_f = tf.cast(width, 'float32')
+            out_height = out_size[0]
+            out_width = out_size[1]
+            zero = tf.zeros([], dtype='int32')
+            max_y = tf.cast(tf.shape(im)[1] - 1, 'int32')
+            max_x = tf.cast(tf.shape(im)[2] - 1, 'int32')
 
-        # reshape to [x_t, y_t , 1] - (homogeneous form)
-        ones = tf.ones_like(x_t_flat)
-        sampling_grid = tf.stack([x_t_flat, y_t_flat, ones])
+            # scale indices from [-1, 1] to [0, width/height]
+            x = (x + 1.0)*(width_f) / 2.0
+            y = (y + 1.0)*(height_f) / 2.0
 
-        # repeat grid num_batch times
-        sampling_grid = tf.expand_dims(sampling_grid, axis=0)
-        sampling_grid = tf.tile(sampling_grid, tf.stack([num_batch, 1, 1]))
+            # do sampling
+            x0 = tf.cast(tf.floor(x), 'int32')
+            x1 = x0 + 1
+            y0 = tf.cast(tf.floor(y), 'int32')
+            y1 = y0 + 1
 
-        # cast to float32 (required for matmul)
-        theta = tf.cast(theta, 'float32')
-        sampling_grid = tf.cast(sampling_grid, 'float32')
+            x0 = tf.clip_by_value(x0, zero, max_x)
+            x1 = tf.clip_by_value(x1, zero, max_x)
+            y0 = tf.clip_by_value(y0, zero, max_y)
+            y1 = tf.clip_by_value(y1, zero, max_y)
+            dim2 = width
+            dim1 = width*height
+            base = _repeat(tf.range(num_batch)*dim1, out_height*out_width)
+            base_y0 = base + y0*dim2
+            base_y1 = base + y1*dim2
+            idx_a = base_y0 + x0
+            idx_b = base_y1 + x0
+            idx_c = base_y0 + x1
+            idx_d = base_y1 + x1
 
-        # transform the sampling grid - batch multiply
-        batch_grids = tf.matmul(theta, sampling_grid)
-        # batch grid has shape (num_batch, 2, H*W)
+            # use indices to lookup pixels in the flat image and restore
+            # channels dim
+            im_flat = tf.reshape(im, tf.stack([-1, channels]))
+            im_flat = tf.cast(im_flat, 'float32')
+            Ia = tf.gather(im_flat, idx_a)
+            Ib = tf.gather(im_flat, idx_b)
+            Ic = tf.gather(im_flat, idx_c)
+            Id = tf.gather(im_flat, idx_d)
 
-        # reshape to (num_batch, H, W, 2)
-        batch_grids = tf.reshape(batch_grids, [num_batch, 2, height, width])
+            # and finally calculate interpolated values
+            x0_f = tf.cast(x0, 'float32')
+            x1_f = tf.cast(x1, 'float32')
+            y0_f = tf.cast(y0, 'float32')
+            y1_f = tf.cast(y1, 'float32')
+            wa = tf.expand_dims(((x1_f-x) * (y1_f-y)), 1)
+            wb = tf.expand_dims(((x1_f-x) * (y-y0_f)), 1)
+            wc = tf.expand_dims(((x-x0_f) * (y1_f-y)), 1)
+            wd = tf.expand_dims(((x-x0_f) * (y-y0_f)), 1)
+            output = tf.add_n([wa*Ia, wb*Ib, wc*Ic, wd*Id])
+            return output
 
-        return batch_grids
+    def _meshgrid(height, width):
+        with tf.variable_scope('_meshgrid'):
+            # This should be equivalent to:
+            #  x_t, y_t = np.meshgrid(np.linspace(-1, 1, width),
+            #                         np.linspace(-1, 1, height))
+            #  ones = np.ones(np.prod(x_t.shape))
+            #  grid = np.vstack([x_t.flatten(), y_t.flatten(), ones])
+            x_t = tf.matmul(tf.ones(shape=tf.stack([height, 1])),
+                            tf.transpose(tf.expand_dims(tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+            y_t = tf.matmul(tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
+                            tf.ones(shape=tf.stack([1, width])))
 
+            x_t_flat = tf.reshape(x_t, (1, -1))
+            y_t_flat = tf.reshape(y_t, (1, -1))
 
-def bilinear_sampler(img, x, y):
+            ones = tf.ones_like(x_t_flat)
+            grid = tf.concat(axis=0, values=[x_t_flat, y_t_flat, ones])
+            return grid
+
+    def _transform(theta, input_dim, out_size):
+        with tf.variable_scope('_transform'):
+            num_batch = tf.shape(input_dim)[0]
+            height = tf.shape(input_dim)[1]
+            width = tf.shape(input_dim)[2]
+            num_channels = tf.shape(input_dim)[3]
+            theta = tf.reshape(theta, (-1, 2, 3))
+            theta = tf.cast(theta, 'float32')
+
+            # grid of (x_t, y_t, 1), eq (1) in ref [1]
+            height_f = tf.cast(height, 'float32')
+            width_f = tf.cast(width, 'float32')
+            out_height = out_size[0]
+            out_width = out_size[1]
+            out_channels = out_size[2]
+            grid = _meshgrid(out_height, out_width)
+            grid = tf.expand_dims(grid, 0)
+            grid = tf.reshape(grid, [-1])
+            grid = tf.tile(grid, tf.stack([num_batch]))
+            grid = tf.reshape(grid, tf.stack([num_batch, 3, -1]))
+
+            # Transform A x (x_t, y_t, 1)^T -> (x_s, y_s)
+            T_g = tf.matmul(theta, grid)
+            x_s = tf.slice(T_g, [0, 0, 0], [-1, 1, -1])
+            y_s = tf.slice(T_g, [0, 1, 0], [-1, 1, -1])
+            x_s_flat = tf.reshape(x_s, [-1])
+            y_s_flat = tf.reshape(y_s, [-1])
+
+            input_transformed = _interpolate(
+                input_dim, x_s_flat, y_s_flat,
+                out_size)
+
+            output = tf.reshape(
+                input_transformed, tf.stack([num_batch, out_height, out_width, out_channels]))
+            return output
+
+    with tf.variable_scope(name):
+        output = _transform(theta, U, out_size)
+        return output
+
+def batch_transformer(U, thetas, out_size, name='BatchSpatialTransformer'):
+    """Batch Spatial Transformer Layer
+    Parameters
+    ----------
+    U : float
+        tensor of inputs [num_batch,height,width,num_channels]
+    thetas : float
+        a set of transformations for each input [num_batch,num_transforms,6]
+    out_size : int
+        the size of the output [out_height,out_width]
+    Returns: float
+        Tensor of size [num_batch*num_transforms,out_height,out_width,num_channels]
     """
-    Performs bilinear sampling of the input images according to the
-    normalized coordinates provided by the sampling grid. Note that
-    the sampling is done identically for each channel of the input.
-
-    To test if the function works properly, output image should be
-    identical to input image when theta is initialized to identity
-    transform.
-
-    Input
-    -----
-    - img: batch of images in (B, H, W, C) layout.
-    - grid: x, y which is the output of affine_grid_generator.
-
-    Returns
-    -------
-    - interpolated images according to grids. Same size as grid.
-
-    """
-    # prepare useful params
-    B = tf.shape(img)[0]
-    H = tf.shape(img)[1]
-    W = tf.shape(img)[2]
-    C = tf.shape(img)[3]
-
-    with tf.variable_scope('Bilinear_Sampler'):
-        max_y = tf.cast(H - 1, 'int32')
-        max_x = tf.cast(W - 1, 'int32')
-        zero = tf.zeros([], dtype='int32')
-
-        # cast indices as float32 (for rescaling)
-        x = tf.cast(x, 'float32')
-        y = tf.cast(y, 'float32')
-
-        # rescale x and y to [0, W/H]
-        x = 0.5 * ((x + 1.0) * tf.cast(W, 'float32'))
-        y = 0.5 * ((y + 1.0) * tf.cast(H, 'float32'))
-
-        # grab 4 nearest corner points for each (x_i, y_i)
-        # i.e. we need a rectangle around the point of interest
-        x0 = tf.cast(tf.floor(x), 'int32')
-        x1 = x0 + 1
-        y0 = tf.cast(tf.floor(y), 'int32')
-        y1 = y0 + 1
-
-        # clip to range [0, H/W] to not violate img boundaries
-        x0 = tf.clip_by_value(x0, zero, max_x)
-        x1 = tf.clip_by_value(x1, zero, max_x)
-        y0 = tf.clip_by_value(y0, zero, max_y)
-        y1 = tf.clip_by_value(y1, zero, max_y)
-
-        # get pixel value at corner coords
-        Ia = get_pixel_value(img, x0, y0)
-        Ib = get_pixel_value(img, x0, y1)
-        Ic = get_pixel_value(img, x1, y0)
-        Id = get_pixel_value(img, x1, y1)
-
-        # recast as float for delta calculation
-        x0 = tf.cast(x0, 'float32')
-        x1 = tf.cast(x1, 'float32')
-        y0 = tf.cast(y0, 'float32')
-        y1 = tf.cast(y1, 'float32')
-
-        # calculate deltas
-        wa = (x1 - x) * (y1 - y)
-        wb = (x1 - x) * (y - y0)
-        wc = (x - x0) * (y1 - y)
-        wd = (x - x0) * (y - y0)
-
-        # add dimension for addition
-        wa = tf.expand_dims(wa, axis=3)
-        wb = tf.expand_dims(wb, axis=3)
-        wc = tf.expand_dims(wc, axis=3)
-        wd = tf.expand_dims(wd, axis=3)
-
-        # compute output
-        out = tf.add_n([wa * Ia, wb * Ib, wc * Ic, wd * Id])
-
-        return out
-
-
-def get_pixel_value(img, x, y):
-    """
-    Utility function to get pixel value for coordinate
-    vectors x and y from a  4D tensor image.
-
-    Input
-    -----
-    - img: tensor of shape (B, H, W, C)
-    - x: flattened tensor of shape (B*H*W, )
-    - y: flattened tensor of shape (B*H*W, )
-
-    Returns
-    -------
-    - output: tensor of shape (B, H, W, C)
-    """
-    shape = tf.shape(x)
-    batch_size = shape[0]
-    height = shape[1]
-    width = shape[2]
-
-    batch_idx = tf.range(0, batch_size)
-    batch_idx = tf.reshape(batch_idx, (batch_size, 1, 1))
-    b = tf.tile(batch_idx, (1, height, width))
-
-    indices = tf.stack([b, y, x], 3)
-
-    return tf.gather_nd(img, indices)
+    with tf.variable_scope(name):
+        num_batch, num_transforms = map(int, thetas.get_shape().as_list()[:2])
+        indices = [[i]*num_transforms for i in xrange(num_batch)]
+        input_repeated = tf.gather(U, tf.reshape(indices, [-1]))
+    return transformer(input_repeated, thetas, out_size)

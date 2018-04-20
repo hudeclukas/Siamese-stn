@@ -5,18 +5,24 @@ import summary_utils as sum_uts
 
 
 class siamese:
-    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, margin:float, batch_size:int, image_size=(150,150,1)):
+    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, margin:float, batch_size:int, image_size=(150,150,1), labels=None, dropout_keep_prob=None, name:str='siamese'):
         self.__margin = margin
         self._batch_size = batch_size
         self._image_size = image_size
 
-        with tf.variable_scope("siamese") as scope:
-            self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[],name='Droput_keep_prob')
+        with tf.variable_scope(name) as scope:
+            if dropout_keep_prob is None:
+                self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[],name='Droput_keep_prob')
+            else:
+                self.dropout_keep_prob = dropout_keep_prob
             self.network_1 = self.__network(net_1_input, 'siam')
             scope.reuse_variables()
             self.network_2 = self.__network(net_2_input, 'siam')
 
-        self.y = tf.placeholder(tf.float32, [None, ], name="labels")
+        if labels is None:
+            self.y = tf.placeholder(tf.float32, [None, ], name="labels")
+        else:
+            self.y = labels
         self.loss = self.__loss_contrastive()
 
     def __network(self, input, name:str):
@@ -103,6 +109,9 @@ class siamese:
             return eucd, eucd2
 
     def __loss_contrastive(self):
+        '''
+        :return: all losses for each image in batch without reduce_mean
+        '''
         # one label means similar, zero is value of dissimilarity
         with tf.variable_scope('Loss_Function'):
             y_t = tf.subtract(1.0, tf.convert_to_tensor(self.y, dtype=tf.float32, name="labels"), name="dissimilarity")
@@ -117,11 +126,11 @@ class siamese:
             dissimilar = tf.multiply(half_t, tf.pow(tf.maximum(0.0, tf.subtract(margin, dist)), 2))
 
             losses = tf.add(similar, dissimilar, name="losses")
-            loss = tf.reduce_mean(losses, name="loss_reduced")
+            # loss = tf.reduce_mean(losses, name="loss_reduced")
 
             tf.summary.histogram('loss_distances', dist)
             tf.summary.scalar('loss_distance_min', tf.reduce_min(dist))
             tf.summary.scalar('loss_distance_max', tf.reduce_max(dist))
-            tf.summary.scalar('loss_contrastive', loss)
+            tf.summary.scalar('loss_contrastive', tf.reduce_mean(losses, name="loss_reduced"))
 
-            return loss
+            return losses

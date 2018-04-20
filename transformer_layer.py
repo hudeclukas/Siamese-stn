@@ -45,13 +45,29 @@ def spatial_transformer_layer(input_fmap_1, input_fmap_2, thetas, batch_size, ou
 
     """
     with tf.name_scope('transformation_matrices'):
-        thetas_divided = tf.reshape(thetas, (-1, 2, 6), 'thetas_divided')
-        matrix_1 = tf.reshape(thetas_divided[:, 0],(-1,2,3),name='matrix_1')
-        matrix_2 = tf.reshape(thetas_divided[:,1], (-1,2,3),name='matrix_2')
+        # thetas_divided = tf.reshape(thetas, (-1, 2, 6), 'thetas_divided')
+        # matrix_1 = tf.reshape(thetas_divided[:, 0],(-1,2,3),name='matrix_1')
+        # matrix_2 = tf.reshape(thetas_divided[:,1], (-1,2,3),name='matrix_2')
+        with tf.name_scope('computation_from_thetas'):
+            matrix_ones = np.zeros((batch_size, 6), np.float32) + 1
+            matrix_sin     = np.array([0,  0, 0, 1, 0, 0], dtype=np.float32)
+            matrix_min_sin = np.array([0, -1, 0, 0, 0, 0], dtype=np.float32)
+            matrix_cos     = np.array([1,  0, 0, 0, 1, 0], dtype=np.float32)
 
-        tf.summary.text('test_matrix_0',tf.as_string(matrix_1[0],precision=4))
-        tf.summary.text('Transformation_Matrix_1', tf.as_string(tf.reshape(matrix_1, [-1, 6]), precision=4))
-        tf.summary.text('Transformation_Matrix_2', tf.as_string(tf.reshape(matrix_2, [-1, 6]), precision=4))
+            matrix_1_sin = tf.multiply(tf.Variable(initial_value=matrix_sin, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.sin(thetas[:,0]),(-1,1))))
+            matrix_1_min_sin = tf.multiply(tf.Variable(initial_value=matrix_min_sin, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.sin(thetas[:,0]),(-1,1))))
+            matrix_1_cos = tf.multiply(tf.Variable(initial_value=matrix_cos, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.cos(thetas[:,0]),(-1,1))))
+            matrix_2_sin = tf.multiply(tf.Variable(initial_value=matrix_sin, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.sin(thetas[:,1]),(-1,1))))
+            matrix_2_min_sin = tf.multiply(tf.Variable(initial_value=matrix_min_sin, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.sin(thetas[:,1]),(-1,1))))
+            matrix_2_cos = tf.multiply(tf.Variable(initial_value=matrix_cos, trainable=False), tf.multiply(tf.Variable(initial_value=matrix_ones, trainable=False), tf.reshape(tf.cos(thetas[:,1]),(-1,1))))
+
+        matrix_1 = tf.reshape(tf.add(matrix_1_sin, tf.add(matrix_1_min_sin, matrix_1_cos)), (-1, 2, 3), name='matrices_1')
+        matrix_2 = tf.reshape(tf.add(matrix_2_sin, tf.add(matrix_2_min_sin, matrix_2_cos)), (-1, 2, 3), name='matrices_2')
+
+        tf.summary.text('thetas_0', tf.as_string(tf.reshape(thetas[:,0],(1,-1))))
+        tf.summary.text('thetas_1', tf.as_string(tf.reshape(thetas[:,1],(1,-1))))
+        tf.summary.text('matrix_0', tf.as_string(matrix_1[0],precision=4))
+        tf.summary.text('matrix_n', tf.as_string(matrix_1[batch_size-1], precision=4))
 
     with tf.variable_scope('Transformer') as scope:
         out_fmap_1 = transformer(input_fmap_1, matrix_1)

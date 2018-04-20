@@ -4,30 +4,80 @@ import numpy as np
 
 from siamese import siamese
 from transformer_layer import spatial_transformer_layer as stl
+from moe_gate import gating_network
 import summary_utils as sum_uts
 
 
-class siamese_stn:
-
-    def __init__(self, siamese_margin:float, batch_size:int, image_size=(150,150,1)):
+class mixture_of_experts:
+    def __init__(self, siamese_margin: float, batch_size:int, image_size=(150,150,1)):
         self.__image_size = image_size
         self.__batch_size = batch_size
 
-        self.net_1_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]], name="net_1_input")
-        self.net_2_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]], name="net_2_input")
+        self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[], name='main_droput_keep_prob')
 
-        with tf.variable_scope('Feature_extractor') as scope:
-            self.feature_extractor_1 = self.feature_extractor(self.net_1_input)
-            scope.reuse_variables()
-            self.feature_extractor_2 = self.feature_extractor(self.net_2_input)
+        self.net_1_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]],
+                                          name="net_1_input")
+        self.net_2_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]],
+                                          name="net_2_input")
+        self.labels = tf.placeholder(tf.float32, [None, ], name="labels")
 
-        self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[], name='Locnet_Droput_keep_prob')
-        self.loc_net = self.localization_network(self.feature_extractor_1, self.feature_extractor_2, 'Locnet')
+        # localization layers
+        self.loc_stn = localization_stn(self.net_1_input, self.net_2_input, batch_size, image_size, self.dropout_keep_prob)
+        # spatial transformer layers
+        (self.stl_1, self.stl_2) = stl(self.net_1_input, self.net_2_input, self.loc_stn.loc_net, batch_size)
 
-        (self.stl_1, self.stl_2) = stl(self.net_1_input, self.net_2_input, self.loc_net, batch_size)
+        # gating network for Mixture of Experts
+        self.gating_network = gating_network(self.stl_1, self.stl_2, batch_size, image_size, self.dropout_keep_prob)
+
+        self.siamese_0 = siamese(self.stl_1, self.stl_2, siamese_margin, batch_size, image_size, labels=self.labels, dropout_keep_prob=self.dropout_keep_prob, name='siamese_0')
+        self.siamese_1 = siamese(self.stl_1, self.stl_2, siamese_margin, batch_size, image_size, labels=self.labels, dropout_keep_prob=self.dropout_keep_prob, name='siamese_1')
+        self.siamese_2 = siamese(self.stl_1, self.stl_2, siamese_margin, batch_size, image_size, labels=self.labels, dropout_keep_prob=self.dropout_keep_prob, name='siamese_2')
+
+        self.loss = self.mixture_of_experts_loss()
+
+    def mixture_of_experts_loss(self):
+        with tf.variable_scope('MoE_loss'):
+            # simple loss
+            # TODO create loss with histogram of gaussians
+            losses = tf.add(tf.multiply(self.gating_network.gate[:,0], self.siamese_0.loss),
+                          tf.add(tf.multiply(self.gating_network.gate[:,1], self.siamese_1.loss),
+                                 tf.multiply(self.gating_network.gate[:,2], self.siamese_2.loss)))
+            loss = tf.reduce_mean(losses, name='moe_loss')
+
+            tf.summary.scalar('overall_loss_moe_min', tf.reduce_min(loss))
+            tf.summary.scalar('overall_loss_moe_max', tf.reduce_max(loss))
+            tf.summary.scalar('overall_loss_moe_mean',loss)
+        return loss
+
+class siamese_stn:
+    def __init__(self, siamese_margin: float, batch_size: int = 40, image_size=(150, 150, 1)):
+        self.net_1_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]],
+                                          name='net_1_input')
+        self.net_2_input = tf.placeholder(dtype=tf.float32, shape=[None, image_size[0], image_size[1], image_size[2]],
+                                          name='net_2_input')
+
+        self.loc_net_stn = localization_stn(self.net_1_input, self.net_2_input, batch_size, image_size)
+
+        (self.stl_1, self.stl_2) = stl(self.net_1_input, self.net_2_input, self.loc_net_stn.loc_net, batch_size)
 
         self.siamese = siamese(self.stl_1, self.stl_2, siamese_margin, batch_size, image_size)
 
+
+class localization_stn:
+
+    def __init__(self, net_1_input:tf.Tensor, net_2_input:tf.Tensor, batch_size:int=40, image_size=(150,150,1), dropout_keep_prob=None):
+        self.__image_size = image_size
+        self.__batch_size = batch_size
+
+        with tf.variable_scope('STN_Feature_extractor') as scope:
+            self.feature_extractor_1 = self.feature_extractor(net_1_input)
+            scope.reuse_variables()
+            self.feature_extractor_2 = self.feature_extractor(net_2_input)
+        if dropout_keep_prob is None:
+            self.dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=[], name='Locnet_Droput_keep_prob')
+        else:
+            self.dropout_keep_prob = dropout_keep_prob
+        self.loc_net = self.localization_network(self.feature_extractor_1, self.feature_extractor_2, 'Locnet')
 
     def feature_extractor(self, input:tf.Tensor):
         with tf.name_scope('summary_input_images'):
@@ -84,21 +134,19 @@ class siamese_stn:
                 keep_prob=self.dropout_keep_prob
             )
             # identity transform
-            initial = np.array([[1., 0, 0], [0, 1., 0],[1., 0, 0], [0, 1., 0]])
-            initial = initial.astype('float32').flatten()
+            # initial = np.array([[1., 0, 0], [0, 1., 0],[1., 0, 0], [0, 1., 0]])
+            # initial = initial.astype('float32').flatten()
 
-            deleter = np.array([[1., 1., 0], [1., 1., 0],[1., 1., 0], [1., 1., 0]])
-            deleter = deleter.astype('float32').flatten()
+            # deleter = np.array([[1., 1., 0], [1., 1., 0],[1., 1., 0], [1., 1., 0]])
+            # deleter = deleter.astype('float32').flatten()
             # localisation network
             with tf.variable_scope(name+'_fc_3', reuse=True):
-                W_fc3 = tf.Variable(tf.zeros([dropout.shape[1].value, 12]), dtype=tf.float32, name='W_fc3')
-                b_fc3 = tf.Variable(initial_value=initial, dtype=tf.float32, name='b_fc3')
+                W_fc3 = tf.Variable(tf.zeros([dropout.shape[1].value, 2]), dtype=tf.float32, name='W_fc3')
+                b_fc3 = tf.Variable(initial_value=[0,0], dtype=tf.float32, name='b_fc3')
                 h_fc3 = tf.matmul(dropout, W_fc3) + b_fc3
-                tf_deleter = tf.constant(deleter, dtype=tf.float32, name='theta_deleter')
-                h_fc3 = tf.multiply(h_fc3, tf_deleter)
+                # tf_deleter = tf.constant(deleter, dtype=tf.float32, name='theta_deleter')
+                # h_fc3 = tf.multiply(h_fc3, tf_deleter)
 
-            with tf.name_scope(name+'Thetas'):
-                tf.summary.text('thetas',tf.as_string(h_fc3,precision=4))
             return h_fc3
 
 class Similarity():

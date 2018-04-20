@@ -5,11 +5,11 @@ import os
 import time
 
 from data_streamer import SUPSIM
-from network import siamese_stn, Similarity
+from network import mixture_of_experts, Similarity
 
 
 PATH_2_TEXDAT = "D:/Vision_Images/Pexels_textures/TexDat/official"
-MODEL_NAME = "siam_stn_001"
+MODEL_NAME = "siam_moe_001"
 
 MAX_ITERS = 25001
 BATCH_SIZE = 24
@@ -24,7 +24,7 @@ def main():
     print((time.time() * 1000) - start, "ms")
 
     # define network
-    siam_stn = siamese_stn(SIAM_MARGIN, BATCH_SIZE)
+    siam_moe = mixture_of_experts(SIAM_MARGIN, BATCH_SIZE)
     # define similarity operations
     sim_ops = Similarity()
     # define optimizer
@@ -32,10 +32,9 @@ def main():
     global_step = tf.Variable(initial_value=0, name='global_step', trainable=False)
     optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
     train_step = optimizer.minimize(
-        loss=siam_stn.siamese.loss,
+        loss=siam_moe.loss,
         global_step=global_step
     )
-
     save_dir = 'model/' + MODEL_NAME + '/'
     saver = tf.train.Saver()
     if not os.path.exists(save_dir):
@@ -69,12 +68,11 @@ def main():
                         (batch_1, batch_2, labels) = supsim.train.next_teacher_batch(batch_size=BATCH_SIZE)
                         l_rate = 0.002 / (1.75 * float(epoch + 1))
                         board_summary,_, loss_v = sess.run(
-                            [merge_summary, train_step, siam_stn.siamese.loss], feed_dict={
-                                siam_stn.net_1_input: batch_1,
-                                siam_stn.net_2_input: batch_2,
-                                siam_stn.siamese.y: labels,
-                                siam_stn.siamese.dropout_keep_prob: 0.6,
-                                siam_stn.dropout_keep_prob: 0.6,
+                            [merge_summary, train_step, siam_moe.loss], feed_dict={
+                                siam_moe.net_1_input: batch_1,
+                                siam_moe.net_2_input: batch_2,
+                                siam_moe.labels: labels,
+                                siam_moe.dropout_keep_prob: 0.6,
                                 learning_rate: l_rate
                             })
 
@@ -99,7 +97,7 @@ def main():
                             idx_all = None
                             for i in range(4):
                                 x_1, x_2, x_l, idx = supsim.train.next_validation_batch(50)
-                                vec1 = siam_stn.siamese.network_1.eval({siam_stn.net_1_input: x_1})
+                                vec1 = siam_moe.siamese.network_1.eval({siam_stn.net_1_input: x_1})
                                 vec2 = siam_stn.siamese.network_2.eval({siam_stn.net_2_input: x_2})
                                 similarity = sess.run(sim_ops.euclid, {sim_ops.vec1: vec1, sim_ops.vec2: vec2})
                                 result = list(zip(similarity, x_l))
